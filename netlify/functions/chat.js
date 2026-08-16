@@ -30,12 +30,12 @@ exports.handler = async function (event) {
     parts: [{ text: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) }]
   }));
 
-  // Modelo gratuito (nivel free de Google AI Studio). Si en el futuro deja de estar disponible,
-  // revisar el nombre vigente en ai.google.dev/gemini-api/docs/pricing
-  const model = 'gemini-2.5-flash';
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+  // Modelos a intentar en orden (Google va renombrando/retirando modelos con frecuencia).
+  // Si ambos dejan de funcionar, revisar los nombres vigentes en ai.google.dev/gemini-api/docs/pricing
+  const modelsToTry = ['gemini-3-flash', 'gemini-3.1-flash-lite'];
 
-  try {
+  async function callGemini(model) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -48,17 +48,26 @@ exports.handler = async function (event) {
         generationConfig: { response_mime_type: 'application/json' }
       })
     });
-
     const data = await response.json();
+    return { ok: response.ok, status: response.status, data };
+  }
 
-    if (!response.ok) {
+  try {
+    let result = null;
+    for (const model of modelsToTry) {
+      result = await callGemini(model);
+      if (result.ok) break; // este modelo funcionó, no probamos el siguiente
+    }
+
+    if (!result.ok) {
       return {
-        statusCode: response.status,
+        statusCode: result.status,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ error: data.error || data })
+        body: JSON.stringify({ error: result.data.error || result.data })
       };
     }
 
+    const data = result.data;
     const text = (data.candidates && data.candidates[0] && data.candidates[0].content &&
                   data.candidates[0].content.parts && data.candidates[0].content.parts[0] &&
                   data.candidates[0].content.parts[0].text) || '';
@@ -78,4 +87,3 @@ exports.handler = async function (event) {
     };
   }
 };
-
