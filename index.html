@@ -591,7 +591,7 @@ tabs.forEach(t=>{
     views.forEach(x=>x.classList.remove('active'));
     t.classList.add('active');
     document.getElementById('view-'+t.dataset.view).classList.add('active');
-    if(t.dataset.view==='meds') renderMeds();
+    if(t.dataset.view==='meds') loadMeds();
     if(t.dataset.view==='alarm') renderAlarms();
     if(t.dataset.view==='health'){ renderBp(); renderGlu(); }
   });
@@ -1052,6 +1052,20 @@ setInterval(checkVoiceReminders, 15*1000);
 const medList = document.getElementById('medList');
 function todayKey(){ return new Date().toISOString().slice(0,10); }
 
+/* Los medicamentos ahora viven en el servidor (Netlify Blobs), no solo en este celular,
+   para que el aviso por Telegram funcione aunque esta pantalla esté cerrada. */
+let medsCache = [];
+
+async function loadMeds(){
+  try{
+    const res = await fetch('/.netlify/functions/meds');
+    medsCache = await res.json();
+  }catch(e){
+    // Si falla la conexión, seguimos mostrando lo último que teníamos cargado.
+  }
+  renderMeds();
+}
+
 /* Foto del medicamento: se comprime a un tamaño chico antes de guardar */
 let tempMedPhoto = null;
 const medPhotoPreview = document.getElementById('medPhotoPreview');
@@ -1093,12 +1107,12 @@ document.getElementById('medPhotoGallery').addEventListener('change', (e)=> hand
 
 function renderMeds(){
   medList.innerHTML = '';
-  if(state.meds.length===0){
+  if(medsCache.length===0){
     medList.innerHTML = `<div class="empty"><span class="ico">💊</span>Todavía no agregaste ningún medicamento.</div>`;
     return;
   }
   const tk = todayKey();
-  state.meds
+  medsCache
     .slice()
     .sort((a,b)=> a.time.localeCompare(b.time))
     .forEach(med=>{
@@ -1120,36 +1134,60 @@ function renderMeds(){
       medList.appendChild(el);
     });
   medList.querySelectorAll('[data-del]').forEach(b=>{
-    b.addEventListener('click', ()=>{
-      state.meds = state.meds.filter(m=>m.id!==b.dataset.del);
-      saveState(); renderMeds();
+    b.addEventListener('click', async ()=>{
+      await fetch('/.netlify/functions/meds', {
+        method:'DELETE',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ id: b.dataset.del })
+      });
+      loadMeds();
     });
   });
 }
 
-document.getElementById('addMedBtn').addEventListener('click', ()=>{
+document.getElementById('addMedBtn').addEventListener('click', async ()=>{
   const name = document.getElementById('medName').value.trim();
   const time = document.getElementById('medTime').value;
   if(!name || !time){ alert('Completá el nombre y el horario.'); return; }
-  state.meds.push({ id: 'm'+Date.now(), name, time, photo: tempMedPhoto, takenLog:{} });
-  saveState();
-  document.getElementById('medName').value='';
-  document.getElementById('medTime').value='';
-  document.getElementById('medPhotoCamera').value='';
-  document.getElementById('medPhotoGallery').value='';
-  tempMedPhoto = null;
-  medPhotoPreview.innerHTML = '<span class="ico">📷</span>';
-  renderMeds();
+  const btn = document.getElementById('addMedBtn');
+  btn.disabled = true;
+  try{
+    await fetch('/.netlify/functions/meds', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ name, time, photo: tempMedPhoto })
+    });
+    document.getElementById('medName').value='';
+    document.getElementById('medTime').value='';
+    document.getElementById('medPhotoCamera').value='';
+    document.getElementById('medPhotoGallery').value='';
+    tempMedPhoto = null;
+    medPhotoPreview.innerHTML = '<span class="ico">📷</span>';
+    await loadMeds();
+  }catch(e){
+    alert('No se pudo guardar el medicamento. Probá de nuevo.');
+  }
+  btn.disabled = false;
 });
 
-/* Chequeo de recordatorios de medicamentos */
+async function markMedTaken(id){
+  await fetch('/.netlify/functions/meds', {
+    method:'PATCH',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ id, date: todayKey() })
+  });
+  await loadMeds();
+}
+
+/* Chequeo de recordatorios de medicamentos (aviso visual + de voz en esta pantalla;
+   el aviso de Telegram lo maneja el servidor por separado, así llega aunque esto esté cerrado) */
 const medOverlay = document.getElementById('medOverlay');
 let activeMedAlert = null;
 function checkMeds(){
   const now = new Date();
   const hhmm = now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
   const tk = todayKey();
-  for(const med of state.meds){
+  for(const med of medsCache){
     if(med.time===hhmm && !(med.takenLog && med.takenLog[tk]) && !medOverlay.classList.contains('show')){
       activeMedAlert = med;
       document.getElementById('medOverlayText').textContent = med.name;
@@ -1166,11 +1204,9 @@ function checkMeds(){
     }
   }
 }
-document.getElementById('medTakenBtn').addEventListener('click', ()=>{
+document.getElementById('medTakenBtn').addEventListener('click', async ()=>{
   if(activeMedAlert){
-    activeMedAlert.takenLog = activeMedAlert.takenLog || {};
-    activeMedAlert.takenLog[todayKey()] = true;
-    saveState(); renderMeds();
+    await markMedTaken(activeMedAlert.id);
   }
   medOverlay.classList.remove('show');
   speechSynthesis.cancel();
@@ -1187,7 +1223,8 @@ document.getElementById('medSnoozeBtn').addEventListener('click', ()=>{
     }, 10*60*1000);
   }
 });
-setInterval(checkMeds, 15*1000);
+setInterval(()=>{ loadMeds().then(checkMeds); }, 30*1000);
+
 
 /* ============================================================
    DESPERTADOR + MÚSICA (Web Audio, generada — sin derechos de autor)
@@ -1332,7 +1369,7 @@ document.getElementById('alarmSnoozeBtn').addEventListener('click', ()=>{
 setInterval(checkAlarms, 15*1000);
 
 /* Render inicial */
-renderMeds();
+loadMeds();
 renderAlarms();
 renderBp();
 renderGlu();
