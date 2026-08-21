@@ -1,10 +1,10 @@
 // Guarda y lee los medicamentos desde Netlify Blobs (en vez de localStorage del celular),
 // para que el chequeo automático (check-reminders.js) los pueda ver aunque el navegador esté cerrado.
 
-const { getStore } = require('@netlify/blobs');
+const { store: storeFrom } = require('./blobs-helper');
 
 function store() {
-  return getStore('meds');
+  return storeFrom('meds');
 }
 
 exports.handler = async function (event) {
