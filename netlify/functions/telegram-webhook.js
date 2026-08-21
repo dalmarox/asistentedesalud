@@ -1,13 +1,23 @@
 // Recibe TODO lo que pasa en el bot de Telegram: cuando alguien le escribe /start
 // (ahí guardamos su chat_id para poder mandarle avisos después) y cuando toca
 // los botones de un aviso ("Ya lo tomé" / "Recordame en 10 minutos").
-
 const { getStore } = require('@netlify/blobs');
-
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 // Código simple para que no cualquiera que encuentre el bot quede registrado.
 // Se lo escribe la persona junto con /start, así: /start CASA123
 const REGISTRO_CODIGO = process.env.TELEGRAM_REGISTRO_CODIGO || 'FAMILIA';
+
+// Credenciales de Netlify Blobs. Si no vienen del entorno automático de
+// Netlify, se las pasamos a mano (configuradas como env vars del sitio).
+const BLOBS_SITE_ID = process.env.BLOBS_SITE_ID || process.env.NETLIFY_SITE_ID;
+const BLOBS_TOKEN = process.env.BLOBS_TOKEN;
+
+function getConfigStore() {
+  return getStore({ name: 'config', siteID: BLOBS_SITE_ID, token: BLOBS_TOKEN });
+}
+function getMedsStore() {
+  return getStore({ name: 'meds', siteID: BLOBS_SITE_ID, token: BLOBS_TOKEN });
+}
 
 async function telegram(method, body) {
   const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/${method}`, {
@@ -17,25 +27,20 @@ async function telegram(method, body) {
   });
   return res.json();
 }
-
 exports.handler = async function (event) {
   if (event.httpMethod !== 'POST') {
     return { statusCode: 200, body: 'ok' };
   }
-
   const update = JSON.parse(event.body || '{}');
-  const configStore = getStore('config');
-  const medsStore = getStore('meds');
-
+  const configStore = getConfigStore();
+  const medsStore = getMedsStore();
   // --- Caso 1: la persona escribió un mensaje (por ejemplo /start) ---
   if (update.message) {
     const chatId = update.message.chat.id;
     const text = (update.message.text || '').trim();
-
     if (text.toUpperCase().startsWith('/START')) {
       const partes = text.split(' ');
       const codigo = (partes[1] || '').toUpperCase();
-
       if (codigo !== REGISTRO_CODIGO.toUpperCase()) {
         await telegram('sendMessage', {
           chat_id: chatId,
@@ -43,7 +48,6 @@ exports.handler = async function (event) {
         });
         return ok();
       }
-
       await configStore.setJSON('telegramChatId', chatId);
       await telegram('sendMessage', {
         chat_id: chatId,
@@ -51,20 +55,16 @@ exports.handler = async function (event) {
       });
       return ok();
     }
-
     // Cualquier otro mensaje de texto (no lo procesamos por ahora)
     return ok();
   }
-
   // --- Caso 2: la persona tocó un botón del aviso ---
   if (update.callback_query) {
     const cb = update.callback_query;
     const chatId = cb.message.chat.id;
     const [accion, medId] = cb.data.split(':'); // ej: "tomado:m12345"
-
     const list = (await medsStore.get('list', { type: 'json' })) || [];
     const med = list.find(m => m.id === medId);
-
     if (accion === 'tomado' && med) {
       const hoy = new Date().toISOString().slice(0, 10);
       med.takenLog = med.takenLog || {};
@@ -77,7 +77,6 @@ exports.handler = async function (event) {
         text: `✔ Ya tomaste: ${med.name}`
       });
     }
-
     if (accion === 'posponer' && med) {
       med.snoozeUntil = Date.now() + 10 * 60 * 1000; // dentro de 10 minutos
       await medsStore.setJSON('list', list);
@@ -88,13 +87,10 @@ exports.handler = async function (event) {
         text: `⏰ Te voy a recordar de nuevo en 10 minutos: ${med.name}`
       });
     }
-
     return ok();
   }
-
   return ok();
 };
-
 function ok() {
   return { statusCode: 200, body: 'ok' };
 }
