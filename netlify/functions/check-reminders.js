@@ -1,7 +1,7 @@
 // Esta función NO la llama el navegador. La llama un cron externo (cron-job.org)
 // una vez por minuto, y revisa si hay que mandar algún aviso de medicamento por Telegram.
 
-const { getStore } = require('@netlify/blobs');
+const { store: storeFrom } = require('./blobs-helper');
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
@@ -14,13 +14,22 @@ async function telegram(method, body) {
   return res.json();
 }
 
+// El servidor de Netlify corre en horario UTC, no en el de Argentina.
+// Calculamos la hora de Argentina a mano (UTC-3, sin horario de verano) para que
+// coincida con lo que la persona ve y carga en su pantalla.
+function horaArgentinaAhora() {
+  const utcMs = Date.now();
+  const argentinaMs = utcMs - 3 * 60 * 60 * 1000;
+  return new Date(argentinaMs);
+}
+
 function todayKey() {
-  return new Date().toISOString().slice(0, 10);
+  return horaArgentinaAhora().toISOString().slice(0, 10);
 }
 
 function hhmmNow() {
-  const now = new Date();
-  return now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0');
+  const now = horaArgentinaAhora();
+  return now.getUTCHours().toString().padStart(2, '0') + ':' + now.getUTCMinutes().toString().padStart(2, '0');
 }
 
 exports.handler = async function () {
@@ -28,8 +37,8 @@ exports.handler = async function () {
     return { statusCode: 500, body: JSON.stringify({ error: 'Falta TELEGRAM_BOT_TOKEN en Netlify.' }) };
   }
 
-  const configStore = getStore('config');
-  const medsStore = getStore('meds');
+  const configStore = storeFrom('config');
+  const medsStore = storeFrom('meds');
 
   const chatId = await configStore.get('telegramChatId', { type: 'json' });
   if (!chatId) {
